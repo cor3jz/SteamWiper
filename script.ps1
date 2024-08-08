@@ -1,4 +1,4 @@
-﻿$Version = 'beta'
+﻿$Version = '0.5'
 $Host.UI.RawUI.MaxPhysicalWindowSize.Width=550
 $Host.UI.RawUI.MaxPhysicalWindowSize.Height=300
 $Host.UI.RawUI.WindowTitle="SteamWiper" + ' - ' + $Version
@@ -21,7 +21,7 @@ WriteLog "SteamWiper started"
 
 Get-Process -name "steam" -ErrorAction SilentlyContinue | ? { $_.SI -eq (Get-Process -PID $PID).SessionId } | Stop-Process -Force | Add-Content $Logfile
 Stop-Service "Steam Client Service" -Force -ErrorAction SilentlyContinue
-WriteLog "Steam has been successfully stopped"
+WriteLog "Службы Steam отстановлены"
 Start-Sleep -Seconds 1
 
 #Steam Cleanup Folders
@@ -109,18 +109,6 @@ function Get-SteamGame
 			$obj
 		}
 	}
-}
-
-#CS:GO Workshop
-if(Get-SteamGame 730) {
-	$CSGOPath = (Get-SteamGame 730).InstallDir
-	if ((Test-Path -Path "$CSGOPath\csgo\maps\workshop") -eq $true)
-	{
-		Get-ChildItem -Path "$CSGOPath\csgo\maps\workshop" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue | Add-Content $Logfile
-		WriteLog "Воркшоп CS:GO удален"
-	}
-} else {
-	WriteLog "Не удалось обнаружить CS:GO на этом ПК"
 }
 
 foreach ($LibrarySubFolder in $LibrarySubFolders)
