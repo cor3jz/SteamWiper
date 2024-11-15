@@ -1,4 +1,4 @@
-﻿$Version = '0.5'
+﻿$Version = '0.5.1'
 $Host.UI.RawUI.MaxPhysicalWindowSize.Width=550
 $Host.UI.RawUI.MaxPhysicalWindowSize.Height=300
 $Host.UI.RawUI.WindowTitle="SteamWiper" + ' - ' + $Version
