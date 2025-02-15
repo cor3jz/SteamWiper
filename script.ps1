@@ -1,151 +1,213 @@
-﻿$Version = '0.5.1'
-$Host.UI.RawUI.MaxPhysicalWindowSize.Width=550
-$Host.UI.RawUI.MaxPhysicalWindowSize.Height=300
-$Host.UI.RawUI.WindowTitle="SteamWiper" + ' - ' + $Version
-$Host.UI.Write('Выполняется очистка Steam...')
+﻿$Title = "SteamWiper"
+$Version = "1.0.0"
+$Host.UI.RawUI.WindowTitle= $Title + ' - ' + $Version
 
-#Log Config
-$LogFile = $env:windir+'\'+'steamwiper.log'
-if (Test-Path -Path "$env:windir\steamwiper.log" -PathType Leaf) {
-    Remove-Item -Path "$env:windir\steamwiper.log"
-}
-function WriteLog
-{
-	Param ([string]$LogString)
-	$Timestamp = (Get-Date).toString("[dd/MM/yyyy HH:mm:ss]")
-	$LogMessage = "$Timestamp $LogString"
-	Add-Content $LogFile -value $LogMessage
+# Настройки
+$configFile = Join-Path $PSScriptRoot 'config.ini'
+$logFile = Join-Path $PSScriptRoot 'debug.log'
+$steamInstallPath = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Valve\Steam').InstallPath
+$global:removedGamesCount = 0
+$global:freedSpace = 0
+$global:cacheFreedSpace = 0
+$global:rootCleanedSpace = 0
+
+if (Test-Path -Path "$logFile" -PathType Leaf) {
+    Remove-Item -Path "$logFile"
 }
 
-WriteLog "SteamWiper started"
-
-Get-Process -name "steam" -ErrorAction SilentlyContinue | ? { $_.SI -eq (Get-Process -PID $PID).SessionId } | Stop-Process -Force | Add-Content $Logfile
-Stop-Service "Steam Client Service" -Force -ErrorAction SilentlyContinue
-WriteLog "Службы Steam отстановлены"
-Start-Sleep -Seconds 1
-
-#Steam Cleanup Folders
-$InstallPath = '' #Папка установки Steam
-$LibraryFolders = @() #Папки библиотек Steam
-$SteamFolders = @(
-	"appcache",
-	"config",
-	"dumps",
-	"logs",
-	"userdata"
-) #Системные папки Steam
-$LibrarySubFolders = @(
-	"downloading",
-	"shadercache",
-	"sourcemods",
-	"temp",
-	"workshop"
-) #Подкаталоги библиотек Steam
-
-if ((Test-Path 'HKLM:\SOFTWARE\Wow6432Node\Valve\Steam') -eq $true) {
-    $InstallPath = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Wow6432Node\Valve\Steam').InstallPath
-} else {
-	WriteLog "Не удалось найти Steam на этом компьютере"
+function Write-Log {
+    param ([string]$message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "$timestamp - $message"
+    Add-Content -Path $logFile -Value $logEntry -Encoding UTF8
+    Write-Output $logEntry
 }
 
-#Очистка системных папок Steam
-foreach ($SteamFolder in $SteamFolders) {
-	$SteamCleanupFolder = "$InstallPath/$SteamFolder"
+function Get-ExcludedAppIDs {
+    if (Test-Path $configFile) {
+        $iniContent = Get-Content $configFile | ForEach-Object { $_.Trim() }
+        $gamesSectionStarted = $false
+        $excludedAppIDs = @()
 
-	if ((Test-Path "$SteamCleanupFolder") -eq '') {
-        WriteLog "Каталог $SteamCleanupFolder не существует"
-        continue
+        foreach ($line in $iniContent) {
+            if ($line -match '^\[Games\]') {
+                $gamesSectionStarted = $true
+                continue
+            }
+            if ($gamesSectionStarted -and $line -match '^\d+$') {
+                $excludedAppIDs += [int]$line
+            }
+        }
+
+        return $excludedAppIDs
+    } else {
+        Write-Log "Файл конфигурации config.ini не найден. Проверьте его наличие и формат."
+        return @()
+    }
+}
+
+function Remove-SteamGame {
+    param (
+        [string]$gameFolder,
+        [string]$manifestFile,
+        [int]$appID,
+        [string]$gameName
+    )
+    $folderSize = (Get-ChildItem -Recurse -Force $gameFolder | Measure-Object -Property Length -Sum).Sum
+    $folderSizeGB = [math]::Round($folderSize / 1GB, 2)
+
+    Remove-Item -Recurse -Force $gameFolder -ErrorAction SilentlyContinue
+    Remove-Item -Force $manifestFile -ErrorAction SilentlyContinue
+
+    Write-Log "Удалено: $gameName ($folderSizeGB GB)"
+
+    $global:removedGamesCount++
+    $global:freedSpace += $folderSizeGB
+}
+
+function Get-SteamLibraries {
+    $steamLibrariesPath = Join-Path $steamInstallPath 'steamapps\libraryfolders.vdf'
+    if (Test-Path $steamLibrariesPath) {
+        $content = Get-Content $steamLibrariesPath -Raw
+        $match = [regex]::Matches($content, '"path"\s+"([^"]+)"')
+        return $match | ForEach-Object { $_.Groups[1].Value }
+    } else {
+        Write-Log "Не удалось найти libraryfolders.vdf. Убедитесь, что Steam установлен."
+        return @()
+    }
+}
+
+function Clear-SteamGames {
+    $excludedAppIDs = Get-ExcludedAppIDs
+    if ($excludedAppIDs.Count -eq 0) {
+        Write-Log "Нет исключений. Удаляем всё."
     }
 
-	Get-ChildItem -Path $SteamCleanupFolder | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue | Add-Content $LogFile
-	WriteLog "$SteamCleanupFolder очищен"
-}
-WriteLog "Очистка системных папок Steam завершена"
+    foreach ($library in Get-SteamLibraries) {
+        $steamAppsPath = Join-Path $library "steamapps"
+        if (Test-Path $steamAppsPath) {
+            $manifestFiles = Get-ChildItem $steamAppsPath -Filter "appmanifest_*.acf" -ErrorAction SilentlyContinue
 
-#Очистка папок библиотеки Steam
-if (Test-Path "$InstallPath\SteamApps\libraryfolders.vdf")
-{
-	$filedata = Get-Content "$InstallPath\SteamApps\libraryfolders.vdf"
-	
-	foreach ($line in $filedata)
-	{
-		if ($line -match '"path".*"(.*)"')
-		{
-			$LibraryFolders += "$($Matches[1])\SteamApps" -replace '\\\\', '\'
-		}
-	}
-}
+            foreach ($manifest in $manifestFiles) {
+                $manifestContent = Get-Content $manifest.FullName -Raw
+                $appIDMatch = $manifestContent | Select-String -Pattern '"appid"\s+"(\d+)"'
+                $nameMatch = $manifestContent | Select-String -Pattern '"name"\s+"([^"]+)"'
 
-function Get-SteamGame
-{
-	param ($Id, $Name)
-	
-	foreach ($lib in $LibraryFolders)
-	{
-		$manifests = Get-ChildItem -Path $lib -File -Filter '*.acf'
-		
-		foreach ($man in $manifests)
-		{
-			$filedata = Get-Content $man.FullName
-			
-			$obj = [pscustomobject] @{
-				ID		   = $null
-				InstallDir = $null
-			}
-			
-			foreach ($line in $filedata)
-			{
-				if ($line -match '"appId".*"([0-9]{1,20})"')
-				{
-					$obj.ID = $Matches[1]
-				}
-				
-				if ($line -match '"installdir".*"(.*)"')
-				{
-					$obj.InstallDir = "$lib\common\$($Matches[1])"
-				}
-			}
-			if ($Id -ne $null) { if ($Id -ne $obj.ID) { continue } }
-			$obj
-		}
-	}
+                if ($appIDMatch -and $nameMatch) {
+                    $appID = [int]$appIDMatch.Matches.Groups[1].Value
+                    $gameName = $nameMatch.Matches.Groups[1].Value
+
+                    if ($excludedAppIDs -notcontains $appID) {
+                        $installDirMatch = Select-String -InputObject $manifestContent -Pattern '"installdir"\s+"([^"]+)"'
+                        if ($installDirMatch) {
+                            $installDir = $installDirMatch.Matches.Groups[1].Value
+                            $gameFolderPath = Join-Path $steamAppsPath "common\$installDir"
+                            if (Test-Path $gameFolderPath) {
+                                Remove-SteamGame -gameFolder $gameFolderPath -manifestFile $manifest.FullName -appID $appID -gameName $gameName
+                            }
+                        } else {
+                            Write-Log "Не удалось найти путь для игры $gameName (appID $appID)"
+                        }
+                    } else {
+                        Write-Log "$gameName не удаляем, потому что в исключениях."
+                    }
+                } else {
+                    Write-Log "Не удалось получить информацию об игре из манифеста $($manifest.FullName)"
+                }
+            }
+        }
+    }
 }
 
-foreach ($LibrarySubFolder in $LibrarySubFolders)
-{
-	foreach ($LibraryFolder in $LibraryFolders)
-	{
-		$LibraryCleanupPath = "$LibraryFolder\$LibrarySubFolder"
+function Clear-SteamCache {
+    Write-Log "Очистка кэша загрузок Steam..."
+    $cacheFolders = @("workshop", "downloading", "temp", "shadercache", "sourcemods")
 
-		if ((Test-Path -Path "$LibraryCleanupPath") -eq '')
-		{
-			WriteLog "Каталог [$LibraryCleanupPath] не существует"
-        	continue
-		}
+    foreach ($library in Get-SteamLibraries) {
+        foreach ($folder in $cacheFolders) {
+            $path = Join-Path $library "steamapps\$folder"
+            if (Test-Path $path) {
+                $folderSize = (Get-ChildItem -Recurse -Force $path -File | Measure-Object -Property Length -Sum).Sum
+                $folderSizeGB = [math]::Round($folderSize / 1GB, 2)
 
-		Get-ChildItem -Path $LibraryCleanupPath | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue | Add-Content $LogFile
-		WriteLog "$LibraryCleanupPath очищен"
-	}	
+                try {
+                    Get-ChildItem -Path $path -Recurse -Force | ForEach-Object {
+                        if (-not $_.PSIsContainer) {
+                            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    $global:cacheFreedSpace += $folderSizeGB
+                    Write-Log "Очищена папка $path (Освобождено $folderSizeGB GB)"
+                } catch {
+                    Write-Log "Ошибка при удалении $path : $_"
+                }
+            } else {
+                Write-Log "Папка $path не найдена, пропускаем."
+            }
+        }
+    }
 }
-WriteLog "Очистка воркшопа и временных файлов игр завершена!"
 
-#Очистка кэша браузера Steam
-if ((Test-Path -Path "$env:localappdata\Steam") -eq $true)
-{
-	Get-ChildItem -Path "$env:localappdata\Steam" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue | Add-Content $Logfile
+function Clear-SteamRootFolders {
+    Write-Log "Очистка кэша Steam..."
+    $steamRoot = "$steamInstallPath"
+    $foldersToClean = @("appcache", "config", "dumps", "logs", "userdata")
+
+    foreach ($folder in $foldersToClean) {
+        $path = Join-Path $steamRoot $folder
+        if (Test-Path $path) {
+            $folderSize = (Get-ChildItem -Recurse -Force $path -File | Measure-Object -Property Length -Sum).Sum
+            $folderSizeGB = [math]::Round($folderSize / 1GB, 2)
+
+            try {
+                if ($folder -eq "config") {
+                    Get-ChildItem -Path $path -Recurse -Force | Where-Object { $_.Name -notmatch "config.vdf" } | Remove-Item -Recurse -Force
+                } else {
+                    Get-ChildItem -Path $path -Recurse -Force | ForEach-Object {
+                        if (-not $_.PSIsContainer) {
+                            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                }
+                $global:rootCleanedSpace += $folderSizeGB
+                Write-Log "Очищена папка $path (Освобождено $folderSizeGB GB)"
+            } catch {
+                Write-Log "Ошибка при очистке $path : $_"
+            }
+        } else {
+            Write-Log "Папка $path не найдена, пропускаем."
+        }
+    }
 }
-WriteLog "Кэш браузера Steam очищен!"
 
-WriteLog "SteamWiper завершил работу"
+Write-Log "$Title - $Version"
+Write-Log "Запуск очистки библиотек Steam..."
 
-Add-Type -AssemblyName System.Windows.Forms
-$global:balmsg = New-Object System.Windows.Forms.NotifyIcon
+Get-Process -name "steam" -ErrorAction SilentlyContinue | ? { $_.SI -eq (Get-Process -PID $PID).SessionId } | Stop-Process -Force
+Stop-Service "Steam Client Service" -Force -ErrorAction SilentlyContinue
+Write-Log "Процесс Steam успешно завершён."
+
+Start-Sleep -Seconds 1
+
+Write-Log "Удаляем все что можно удалить..."
+Clear-SteamGames
+Start-Sleep -Seconds 1
+Clear-SteamCache
+Start-Sleep -Seconds 1
+Clear-SteamRootFolders
+
+$summaryMessage = "Удалено игр: $global:removedGamesCount, Освобождено места: $global:freedSpace GB, Кэш загрузок очищен: $global:cacheFreedSpace GB, Кэш Steam очищен: $global:rootCleanedSpace GB"
+Write-Log $summaryMessage
+Write-Log "Работа SteamWiper завершена!"
+
+[System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+$global:balloon = New-Object System.Windows.Forms.NotifyIcon
 $path = (Get-Process -id $pid).Path
-$balmsg.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($path)
-$balmsg.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-$balmsg.BalloonTipText = "Очистка Steam успешно завершена!"
-$balmsg.BalloonTipTitle = "SteamWiper"
-$balmsg.Visible = $true
-$balmsg.ShowBalloonTip(5000)
-
-exit
+$balloon.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($path)
+$balloon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+$balloon.BalloonTipText = $summaryMessage
+$balloon.BalloonTipTitle = $Title
+$balloon.Visible = $true
+$balloon.ShowBalloonTip(5000)
+Start-Sleep 5
+$balloon.Dispose()
