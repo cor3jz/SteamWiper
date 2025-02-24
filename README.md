@@ -1,15 +1,29 @@
+<div align="center">
+
+<img width="128" height="128" src="https://raw.githubusercontent.com/cor3jz/SteamWiper/refs/heads/main/icon.png">
+
 # SteamWiper
 
-<p align="center">
-  <img width="128" height="128" src="https://raw.githubusercontent.com/cor3jz/SteamWiper/refs/heads/main/icon.png">
-</p>
+**SteamWiper - Утилита для удаления игр и очистки Steam**
+
+![downloads-badge](https://img.shields.io/github/downloads/cor3jz/SteamWiper/total?color=blue)
+![release-badge](https://img.shields.io/github/v/release/cor3jz/SteamWiper?color=green&display_name=release)
+![static-badge](https://img.shields.io/badge/PowerShell-blue)
+
+
+[![ru](https://img.shields.io/badge/lang-ru-blue)](./README.md)
+[![en](https://img.shields.io/badge/lang-en-red)](./README.en.md)
+
+![stars-badge](https://img.shields.io/github/stars/cor3jz/SteamWiper)
+
+</div>
 
 > [!NOTE]  
 > Данная утилита представлена исключительно для ознакомления! Разработчик не несет ответственности за удаленные с ваших компьютеров файлы и некорректную работу программ с которыми работает данный скрипт! Всем добра :heart:
 
 ## Для чего?
 
-SteamWiper предназанчен для автоматического удаления игр Steam с ПК кроме тех, которые вы добавите в исключения, очистки кэша загрузок и игр, а также кэша пользователей.
+SteamWiper предназначен для автоматического удаления игр Steam с ПК кроме тех, которые вы добавите в исключения, очистки кэша загрузок и игр, а также кэша пользователей.
 
 ## Как использовать?
 
